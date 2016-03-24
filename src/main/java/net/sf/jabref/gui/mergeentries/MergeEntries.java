@@ -71,8 +71,7 @@ public class MergeEntries {
             Localization.lang("Right"),
             Localization.lang("Right entry")};
     private static final String[] DIFF_MODES = {"Plain text",
-            "Latexdiff style",
-            "Symmetric"};
+            "Latexdiff style - word", "Latexdiff style - character", "Symmetric - word", "Symmetric - character"};
 
     private static final String CHANGE_ADDITION_START = "<font color=\"green\"><u><b>";
     private static final String CHANGE_ADDITION_END = "</b></u></font>";
@@ -383,16 +382,28 @@ public class MergeEntries {
         for (String field : joint) {
             String leftString = leftEntry.getField(field);
             String rightString = rightEntry.getField(field);
+            String tmpLeftString;
             switch (diffMode.getSelectedIndex()) {
             case 0: // Plain text
                 break;
-            case 1: // Latexdiff style
-                rightString = generateLatexdiffHighlighting(leftString, rightString);
+            case 1: // Latexdiff style - word
+                rightString = generateLatexdiffHighlighting(leftString, rightString, " ");
                 break;
-            case 2: // Symmetric
-                String tmpLeftString = generateSymmetricHighlighting(rightString, leftString);
-                rightString = generateSymmetricHighlighting(leftString, rightString);
+            case 2: // Latexdiff style - character
+                rightString = generateLatexdiffHighlighting(leftString, rightString, "");
+                break;
+            case 3: // Symmetric - word
+                tmpLeftString = generateSymmetricHighlighting(rightString, leftString, " ");
+                rightString = generateSymmetricHighlighting(leftString, rightString, " ");
                 leftString = tmpLeftString;
+                break;
+            case 4: // Symmetric - character
+                tmpLeftString = generateSymmetricHighlighting(rightString, leftString, "");
+                rightString = generateSymmetricHighlighting(leftString, rightString, "");
+                leftString = tmpLeftString;
+                break;
+            default: // Shouldn't happen
+                break;
             }
             if ((leftString != null) && leftTextPanes.containsKey(field)) {
                 leftTextPanes.get(field).setText(leftString);
@@ -410,10 +421,10 @@ public class MergeEntries {
         javax.swing.SwingUtilities.invokeLater(() -> scrollPane.getVerticalScrollBar().setValue(valueToBeSet));
     }
 
-    private String generateLatexdiffHighlighting(String baseString, String modifiedString) {
+    private String generateLatexdiffHighlighting(String baseString, String modifiedString, String separator) {
         if ((baseString != null) && (modifiedString != null)) {
-            List<String> string1List = new ArrayList<>(Arrays.asList(baseString.split("")));
-            List<String> string2List = new ArrayList<>(Arrays.asList(modifiedString.split("")));
+            List<String> string1List = new ArrayList<>(Arrays.asList(baseString.split(separator)));
+            List<String> string2List = new ArrayList<>(Arrays.asList(modifiedString.split(separator)));
             Patch<String> patch = DiffUtils.diff(string1List, string2List);
             List<Delta<String>> deltaList = new ArrayList<>(patch.getDeltas());
             Collections.reverse(deltaList);
@@ -427,9 +438,9 @@ public class MergeEntries {
                         string1List.set(startPos + offset, (offset == 0 ? REMOVAL_START : "") + line);
                         offset++;
                     }
-                    string1List.set((startPos + offset) - 1, string1List.get((startPos + offset) - 1)
-                            + REMOVAL_END + ADDITION_START + String.join("", delta.getRevised().getLines())
-                            + ADDITION_END);
+                    string1List.set((startPos + offset) - 1,
+                            string1List.get((startPos + offset) - 1) + REMOVAL_END + separator + ADDITION_START
+                                    + String.join(separator, delta.getRevised().getLines()) + ADDITION_END);
                     break;
                 case DELETE:
                     for (String line : lines) {
@@ -441,21 +452,21 @@ public class MergeEntries {
                     break;
                 case INSERT:
                     string1List.add(delta.getOriginal().getPosition(),
-                            ADDITION_START + String.join("", delta.getRevised().getLines()) + ADDITION_END);
+                            ADDITION_START + String.join(separator, delta.getRevised().getLines()) + ADDITION_END);
                     break;
                 default:
                     break;
                 }
             }
-            return HTML_START + String.join("", string1List) + HTML_END;
+            return HTML_START + String.join(separator, string1List) + HTML_END;
         }
         return modifiedString;
     }
 
-    private String generateSymmetricHighlighting(String baseString, String modifiedString) {
+    private String generateSymmetricHighlighting(String baseString, String modifiedString, String separator) {
         if ((baseString != null) && (modifiedString != null)) {
-            List<String> string1List = new ArrayList<>(Arrays.asList(baseString.split("")));
-            List<String> string2List = new ArrayList<>(Arrays.asList(modifiedString.split("")));
+            List<String> string1List = new ArrayList<>(Arrays.asList(baseString.split(separator)));
+            List<String> string2List = new ArrayList<>(Arrays.asList(modifiedString.split(separator)));
             Patch<String> patch = DiffUtils.diff(string1List, string2List);
             List<Delta<String>> deltaList = new ArrayList<>(patch.getDeltas());
             Collections.reverse(deltaList);
@@ -470,8 +481,9 @@ public class MergeEntries {
                         offset++;
                     }
                     string1List.set((startPos + offset) - 1,
-                            string1List.get((startPos + offset) - 1) + CHANGE_REMOVAL_END + CHANGE_ADDITION_START
-                                    + String.join("", delta.getRevised().getLines()) + CHANGE_ADDITION_END);
+                            string1List.get((startPos + offset) - 1) + CHANGE_REMOVAL_END + separator
+                                    + CHANGE_ADDITION_START + String.join(separator, delta.getRevised().getLines())
+                                    + CHANGE_ADDITION_END);
                     break;
                 case DELETE:
                     for (offset = 0; offset <= (lines.size() - 1); offset++) {
@@ -480,13 +492,13 @@ public class MergeEntries {
                     break;
                 case INSERT:
                     string1List.add(delta.getOriginal().getPosition(),
-                            ADDITION_START + String.join("", delta.getRevised().getLines()) + ADDITION_END);
+                            ADDITION_START + String.join(separator, delta.getRevised().getLines()) + ADDITION_END);
                     break;
                 default:
                     break;
                 }
             }
-            return HTML_START + String.join("", string1List) + HTML_END;
+            return HTML_START + String.join(separator, string1List) + HTML_END;
         }
         return modifiedString;
     }
