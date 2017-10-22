@@ -17,7 +17,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import javax.swing.AbstractAction;
 import javax.swing.Action;
@@ -37,10 +40,12 @@ import javax.swing.undo.UndoableEdit;
 
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.collections.ObservableList;
 import javafx.embed.swing.JFXPanel;
 import javafx.scene.Scene;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TabPane.TabClosingPolicy;
 import javafx.scene.input.KeyEvent;
 
 import org.jabref.Globals;
@@ -94,14 +99,13 @@ import org.fxmisc.easybind.EasyBind;
 
 
 /**
- * GUI component that allows editing of the fields of a BibEntry (i.e. the
- * one that shows up, when you double click on an entry in the table)
+ * GUI component that allows editing of the fields of a BibEntry (i.e. the one that shows up, when you double click on
+ * an entry in the table)
  * <p>
  * It hosts the tabs (required, general, optional) and the buttons to the left.
  * <p>
- * EntryEditor also registers itself to the event bus, receiving
- * events whenever a field of the entry changes, enabling the text fields to
- * update themselves if the change is made from somewhere else.
+ * EntryEditor also registers itself to the event bus, receiving events whenever a field of the entry changes, enabling
+ * the text fields to update themselves if the change is made from somewhere else.
  */
 public class EntryEditor extends JPanel implements EntryContainer {
 
@@ -153,7 +157,7 @@ public class EntryEditor extends JPanel implements EntryContainer {
     private final RedoAction redoAction = new RedoAction();
     private final List<SearchQueryHighlightListener> searchListeners = new ArrayList<>();
     private final JFXPanel container;
-    private final List<EntryEditorTab> tabs;
+    private final Map<EntryEditorTab, Integer> tabOrder;
 
     /**
      * Indicates that we are about to go to the next or previous entry
@@ -182,18 +186,24 @@ public class EntryEditor extends JPanel implements EntryContainer {
         );
         add(container, BorderLayout.CENTER);
 
+        // We will hold the list of tabs as map tab -> int that gives us the correct order of tabs
+        final List<EntryEditorTab> tabs = createTabs();
+        tabOrder = IntStream.range(0, tabs.size())
+                .boxed()
+                .collect(Collectors.toMap(tabs::get, Function.identity()));
+
+        tabbed.setTabClosingPolicy(TabClosingPolicy.UNAVAILABLE);
         DefaultTaskExecutor.runInJavaFXThread(() -> {
-                    EasyBind.subscribe(tabbed.getSelectionModel().selectedItemProperty(), tab -> {
-                        EntryEditorTab activeTab = (EntryEditorTab) tab;
-                        if (activeTab != null) {
-                            activeTab.notifyAboutFocus(entry);
-                        }
-                    });
-                });
+            tabbed.getTabs().setAll(tabs);
+            EasyBind.subscribe(tabbed.getSelectionModel().selectedItemProperty(), tab -> {
+                EntryEditorTab activeTab = (EntryEditorTab) tab;
+                if (activeTab != null) {
+                    activeTab.notifyAboutFocus(entry);
+                }
+            });
+        });
 
         setupKeyBindings();
-
-        tabs = createTabs();
     }
 
     public void setEntry(BibEntry entry) {
@@ -205,10 +215,9 @@ public class EntryEditor extends JPanel implements EntryContainer {
         displayedBibEntryType = entry.getType();
 
         DefaultTaskExecutor.runInJavaFXThread(() -> {
-            recalculateVisibleTabs(this.getVisibleTabName());
+            recalculateVisibleTabs();
 
             tabbed.setStyle("-fx-font-size: " + Globals.prefs.getFontSizeFX() + "pt;");
-
         });
         TypedBibEntry typedEntry = new TypedBibEntry(entry, panel.getBibDatabaseContext().getMode());
         typeLabel.setText(typedEntry.getTypeForDisplay());
@@ -293,20 +302,43 @@ public class EntryEditor extends JPanel implements EntryContainer {
         closeAction.actionPerformed(null);
     }
 
-    private void recalculateVisibleTabs(String lastTabName) {
-        List<Tab> visibleTabs = new LinkedList<>();
-        for (EntryEditorTab tab : tabs) {
-            if (tab.shouldShow(entry)) {
-                visibleTabs.add(tab);
+    /**
+     * Called when the editor should show a new/different entry. Some BibEntries don't have all tabs shows and we need
+     * to remove obsolete tabs from the editor and add tabs that were not shown but are required for the new BibEntry.
+     */
+    private void recalculateVisibleTabs() {
+
+        // start of ugly hack:
+        // We need to find out, which tabs will be shown and which not and remove and re-add the appropriate tabs
+        // to the editor. We don't want to simply remove all and re-add the complete list of visible tabs, because
+        // the tabs give an ugly animation the looks like all tabs are shifting in from the right.
+        // This hack is required since tabbed.getTabs().setAll(..) changes the order of the tabs in the editor
+
+        final Set<EntryEditorTab> tabs = tabOrder.keySet();
+        final ObservableList<Tab> currentTabs = tabbed.getTabs();
+        final List<EntryEditorTab> toBeRemoved = tabs.stream().filter(tab -> !tab.shouldShow(entry)).collect(Collectors.toList());
+        final List<EntryEditorTab> toBeAdded = tabs.stream().filter(
+                tab -> !toBeRemoved.contains(tab) && !currentTabs.contains(tab)
+        ).collect(Collectors.toList());
+
+        currentTabs.removeAll(toBeRemoved);
+
+        for (EntryEditorTab tab : toBeAdded) {
+            // a simple loop to prevent concurrent modification exception with iterators
+            for (int i = 0; i < currentTabs.size(); i++) {
+                final EntryEditorTab current = (EntryEditorTab) currentTabs.get(i);
+                if ((tabOrder.get(tab) < tabOrder.get(current))) {
+                    currentTabs.add(currentTabs.indexOf(current), tab);
+                    break;
+                }
             }
         }
-        tabbed.getTabs().setAll(visibleTabs);
-        tabbed.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        // end of ugly hack
 
+        // When the default is not the source tab and the last selected tab is now not longer available, focus
+        // automatically shifts to the tab on the left
         if (Globals.prefs.getBoolean(JabRefPreferences.DEFAULT_SHOW_SOURCE)) {
             tabbed.getSelectionModel().select(sourceTab);
-        } else {
-            selectLastUsedTab(lastTabName);
         }
 
         // Notify current tab about new entry
@@ -516,7 +548,6 @@ public class EntryEditor extends JPanel implements EntryContainer {
     private void unregisterListeners() {
         this.entry.unregisterListener(this);
         removeSearchListeners();
-
     }
 
     private void showChangeEntryTypePopupMenu() {
@@ -615,7 +646,7 @@ public class EntryEditor extends JPanel implements EntryContainer {
 
         @Override
         public void actionPerformed(ActionEvent e) {
-            Map<String,String> cleanedEntries = entry
+            Map<String, String> cleanedEntries = entry
                     .getFieldMap()
                     .entrySet()
                     .stream()
